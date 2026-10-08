@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 鐳射卡牌鑄造系統 | 查研觀攝 TCG LEGEND</title>
+    <!-- 一鍵高解析匯出所需之 html2canvas CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        /* 全域變數與動態主題色彩系統 */
+        :root {
+            --theme-color: #e5a93c;
+            --theme-color-glow: rgba(229, 169, 60, 0.45);
+            --theme-border: #d4952c;
+            --theme-dark-bg: #1c1f2b;
+
+            --laser-gradient: linear-gradient(115deg, transparent 20%, rgba(255, 90, 90, 0.3) 30%, rgba(255, 210, 0, 0.35) 42%, rgba(0, 255, 255, 0.3) 50%, rgba(130, 100, 255, 0.3) 60%, transparent 72%);
+            --foil-pos-x: 50%;
+            --foil-pos-y: 50%;
+            --glare-pos-x: 50%;
+            --glare-pos-y: 50%;
+            --glare-opacity: 0;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px 16px;
+            background-color: #08090f;
+            background-image:
+                radial-gradient(circle at 50% 0%, rgba(30, 41, 69, 0.6) 0%, transparent 70%),
+                radial-gradient(circle at 80% 80%, rgba(20, 24, 40, 0.7) 0%, transparent 50%),
+                #08090f;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang TC", "Microsoft JhengHei", sans-serif;
+            color: #f1f5f9;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 1. 流體響應式佈局架構 (RWD) */
+        .workspace {
+            display: flex;
+            width: 100%;
+            max-width: 1180px;
+            gap: 40px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 桌面端 (>= 1024px)：雙欄佈局 */
+        @media (min-width: 1024px) {
+            .workspace {
+                flex-direction: row;
+                align-items: center;
+            }
+
+            .stage-area {
+                flex: 1;
+                max-width: 520px;
+            }
+
+            .control-panel {
+                flex: 1;
+                max-width: 540px;
+            }
+        }
+
+        /* 行動端與平板端 (< 1024px)：垂直彈性堆疊 */
+        @media (max-width: 1023px) {
+            .workspace {
+                flex-direction: column;
+                gap: 28px;
+            }
+
+            .stage-area {
+                width: 100%;
+                max-width: 420px;
+            }
+
+            .control-panel {
+                width: 100%;
+                max-width: 600px;
+            }
+        }
+
+        /* 2. 3D 視差舞台容器 */
+        .stage-area {
+            perspective: 1200px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 10px;
+        }
+
+        .flip-container {
+            width: 378px;
+            max-width: 90vw;
+            aspect-ratio: 63 / 88;
+            /* 嚴格維持 TCG 標準黃金比例 */
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.65s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        .flip-container.flipped {
+            transform: rotateY(180deg);
+        }
+
+        /* 卡牌本體共用設定 */
+        .card-face {
+            position: absolute;
+            inset: 0;
+            backface-visibility: hidden;
+            border-radius: 20px;
+            border: 4px solid var(--theme-border);
+            box-sizing: border-box;
+            background: #141722;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7), 0 0 25px var(--theme-color-glow);
+            transform-style: preserve-3d;
+            overflow: hidden;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        /* 卡牌正面 */
+        .card-front {
+            transform: rotateX(0deg) rotateY(0deg);
+            cursor: grab;
+        }
+
+        .card-front:active {
+            cursor: grabbing;
+        }
+
+        /* 卡牌背面 */
+        .card-back {
+            transform: rotateY(180deg);
+            background: radial-gradient(circle at 50% 50%, #1f2538 0%, #0d101a 90%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            border-color: var(--theme-border);
+            text-align: center;
+            padding: 30px 20px;
+        }
+
+        /* 雷射箔膜光澤層 (Foil Layer) */
+        .card-front::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: var(--laser-gradient);
+            background-size: 350% 350%;
+            background-position: var(--foil-pos-x, 50%) var(--foil-pos-y, 50%);
+            mix-blend-mode: color-dodge;
+            z-index: 6;
+            pointer-events: none;
+            border-radius: 16px;
+            transition: background-position 0.05s linear;
+        }
+
+        /* 表面鏡面高光層 (Specular Glare Layer) */
+        .card-front::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at var(--glare-pos-x, 50%) var(--glare-pos-y, 50%), rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.05) 45%, transparent 70%);
+            mix-blend-mode: overlay;
+            opacity: var(--glare-opacity, 0.6);
+            z-index: 7;
+            pointer-events: none;
+            border-radius: 16px;
+            transition: opacity 0.2s ease;
+        }
+
+        /* 即時可編輯元素視覺回饋 */
+        [contenteditable="true"] {
+            user-select: text;
+            outline: none;
+            border-radius: 4px;
+            transition: background 0.2s, box-shadow 0.2s;
+            cursor: text;
+        }
+
+        [contenteditable="true"]:hover {
+            background: rgba(255, 255, 255, 0.12);
+            box-shadow: 0 0 6px var(--theme-color-glow);
+        }
+
+        [contenteditable="true"]:focus {
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 0 10px var(--theme-color);
+        }
+
+        /* 卡牌頂部資訊 Header */
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .card-title-group {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .tag-type {
+            background: var(--theme-color);
+            color: #0b0c16;
+            font-size: 10px;
+            font-weight: 800;
+            padding: 2px 7px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            transition: background 0.3s;
+        }
+
+        .card-name {
+            font-size: 18px;
+            font-weight: 800;
+            color: #ffffff;
+            letter-spacing: 0.5px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+        }
+
+        .hp-group {
+            font-size: 17px;
+            font-weight: 900;
+            color: #ff5e5e;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            text-shadow: 0 2px 6px rgba(255, 94, 94, 0.3);
+        }
+
+        /* 卡牌主立繪區 */
+        .image-slot {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1.45 / 1;
+            background: #0f121b;
+            border-radius: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            overflow: hidden;
+            margin-bottom: 10px;
+            z-index: 2;
+            cursor: pointer;
+            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.6);
+        }
+
+        .image-slot img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            transition: transform 0.3s ease;
+        }
+
+        .image-slot:hover img {
+            transform: scale(1.03);
+        }
+
+        .image-slot-hint {
+            position: absolute;
+            bottom: 6px;
+            left: 6px;
+            background: rgba(0, 0, 0, 0.7);
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #cbd5e1;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+
+        .image-slot:hover .image-slot-hint {
+            opacity: 1;
+        }
+
+        .rarity-label {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: rgba(10, 12, 18, 0.85);
+            border: 1px solid var(--theme-color);
+            color: var(--theme-color);
+            font-size: 9.5px;
+            padding: 3px 6px;
+            border-radius: 5px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+            transition: color 0.3s, border-color 0.3s;
+        }
+
+        /* 技能與機制列表 */
+        .skill-list {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            flex: 1;
+            position: relative;
+            z-index: 2;
+        }
+
+        .skill-box {
+            background: rgba(15, 20, 32, 0.65);
+            backdrop-filter: blur(4px);
+            border-radius: 8px;
+            padding: 6px 9px;
+            border-left: 3px solid #4a5568;
+            font-size: 11px;
+            transition: border-color 0.3s, background 0.2s;
+        }
+
+        .skill-box.trait {
+            border-left-color: var(--theme-color);
+            background: rgba(229, 169, 60, 0.08);
+        }
+
+        .skill-title-line {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 800;
+            color: #ffffff;
+            margin-bottom: 2px;
+            font-size: 11.5px;
+        }
+
+        .skill-damage {
+            color: #ff6464;
+            font-size: 12.5px;
+            font-weight: 900;
+        }
+
+        .skill-description {
+            color: #94a3b8;
+            font-size: 10.5px;
+            line-height: 1.35;
+        }
+
+        /* 卡牌底部印記與對抗設定 */
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            padding-top: 6px;
+            margin-top: auto;
+            font-size: 9.5px;
+            color: #94a3b8;
+            position: relative;
+            z-index: 2;
+        }
+
+        .copyright-line {
+            display: flex;
+            justify-content: space-between;
+            font-size: 8px;
+            color: #64748b;
+            margin-top: 4px;
+            letter-spacing: 0.3px;
+            position: relative;
+            z-index: 2;
+        }
+
+        /* 卡牌背面樣式 */
+        .back-emblem {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            border: 3px double var(--theme-border);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 16px;
+            background: radial-gradient(circle, rgba(229, 169, 60, 0.2) 0%, transparent 70%);
+            box-shadow: 0 0 25px var(--theme-color-glow);
+            transition: all 0.3s;
+        }
+
+        .back-logo {
+            font-size: 52px;
+            filter: drop-shadow(0 0 15px var(--theme-color));
+        }
+
+        .back-title {
+            font-size: 24px;
+            font-weight: 900;
+            letter-spacing: 5px;
+            color: var(--theme-color);
+            text-shadow: 0 0 15px var(--theme-color-glow);
+            margin-bottom: 4px;
+            transition: color 0.3s;
+        }
+
+        .back-subtitle {
+            font-size: 11px;
+            letter-spacing: 3px;
+            color: #94a3b8;
+            text-transform: uppercase;
+        }
+
+        .back-quote {
+            font-size: 11px;
+            color: #64748b;
+            font-style: italic;
+            margin-top: 24px;
+            padding: 0 10px;
+            line-height: 1.5;
+        }
+
+        /* 3. 毛玻璃控制台面版 */
+        .control-panel {
+            background: rgba(22, 27, 44, 0.6);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 20px;
+            padding: 24px;
+            box-sizing: border-box;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 12px;
+            margin-bottom: 18px;
+        }
+
+        .panel-header h2 {
+            margin: 0;
+            font-size: 19px;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .panel-header .badge {
+            background: rgba(229, 169, 60, 0.15);
+            color: var(--theme-color);
+            border: 1px solid var(--theme-border);
+            font-size: 10px;
+            font-weight: bold;
+            padding: 3px 8px;
+            border-radius: 12px;
+        }
+
+        .panel-group {
+            margin-bottom: 16px;
+        }
+
+        .panel-group label {
+            display: block;
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+
+        /* 主題顏色色票選擇列 */
+        .theme-palette {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+
+        .palette-btn {
+            flex: 1;
+            height: 36px;
+            border-radius: 8px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+        }
+
+        .palette-btn:hover {
+            transform: translateY(-2px);
+            filter: brightness(1.15);
+        }
+
+        .palette-btn.active {
+            border-color: #ffffff;
+            box-shadow: 0 0 12px rgba(255, 255, 255, 0.6);
+            transform: scale(1.04);
+        }
+
+        /* 預設角色捷徑按鈕 */
+        .preset-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .btn-preset {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #cbd5e1;
+            padding: 6px 4px;
+            border-radius: 6px;
+            font-size: 11px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .btn-preset:hover {
+            background: rgba(255, 255, 255, 0.15);
+            color: #ffffff;
+            border-color: var(--theme-color);
+        }
+
+        /* 控制面板按鈕與選單 */
+        select {
+            width: 100%;
+            background: #111420;
+            border: 1px solid #32394c;
+            color: white;
+            padding: 10px 12px;
+            border-radius: 8px;
+            outline: none;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            box-sizing: border-box;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        select:focus {
+            border-color: var(--theme-color);
+            box-shadow: 0 0 8px var(--theme-color-glow);
+        }
+
+        .btn-action {
+            width: 100%;
+            background: linear-gradient(135deg, #242b3e 0%, #151a27 100%);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            color: #ffffff;
+            padding: 10px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-action:hover {
+            border-color: var(--theme-color);
+            background: rgba(255, 255, 255, 0.12);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .btn-action:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--theme-color) 0%, #a4701e 100%);
+            color: #000;
+            border: none;
+            font-weight: 900;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #ffc965 0%, var(--theme-color) 100%);
+            box-shadow: 0 0 20px var(--theme-color-glow);
+            transform: translateY(-2px);
+        }
+
+        .btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .tip-box {
+            font-size: 11px;
+            color: #94a3b8;
+            background: rgba(10, 14, 24, 0.6);
+            padding: 12px;
+            border-radius: 10px;
+            margin-top: 14px;
+            line-height: 1.6;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .tip-box b {
+            color: #e2e8f0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="workspace">
+        <!-- 左側：卡牌 3D 舞台展示區域 -->
+        <div class="stage-area" id="stage-area">
+            <div class="flip-container" id="flip-wrapper">
+                <!-- 卡牌正面 -->
+                <div class="card-face card-front" id="tcg-card">
+                    <!-- 頂部資訊列 -->
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="tag-type" id="card-tag" contenteditable="true">Specialist</span>
+                            <span class="card-name" id="card-name" contenteditable="true">查研觀攝</span>
+                        </div>
+                        <div class="hp-group">
+                            <span style="font-size: 11px; color: #64748b; font-weight: 800;">HP</span>
+                            <span id="card-hp" contenteditable="true">1000</span>
+                        </div>
+                    </div>
+
+                    <!-- 主視覺立繪區 -->
+                    <div class="image-slot" id="image-slot" title="點擊或自控制面板更換圖片">
+                        <img id="card-img-preview"
+                            src="https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&auto=format&fit=crop&q=80"
+                            alt="卡牌立繪">
+                        <span class="image-slot-hint">點擊更換圖片</span>
+                        <div class="rarity-label" id="card-rarity" contenteditable="true">SSR ✦ LEGEND</div>
+                    </div>
+
+                    <!-- 技能與戰鬥機制列表 -->
+                    <div class="skill-list">
+                        <!-- 特性 -->
+                        <div class="skill-box trait">
+                            <div class="skill-title-line">
+                                <span id="card-trait-title" contenteditable="true">🔶 【特性】全焦段聚焦 ‧ Multi-Focus</span>
+                            </div>
+                            <div class="skill-description" id="card-trait-desc" contenteditable="true">
+                                切換工程架構鏡頭與眼鏡鏡頭視角，觀察精準度提升 40%，且不受資訊過載干擾。
+                            </div>
+                        </div>
+
+                        <!-- 普通招式 -->
+                        <div class="skill-box">
+                            <div class="skill-title-line">
+                                <span id="card-skill1-title" contenteditable="true">⚪⚪ 【觀察紀錄員 ‧ Vision Recorder】</span>
+                                <span class="skill-damage" id="card-skill1-dmg" contenteditable="true">180+</span>
+                            </div>
+                            <div class="skill-description" id="card-skill1-desc" contenteditable="true">
+                                透過單眼焦距精準捕捉全景細節脈絡，重構結構邏輯並對目標區域造成高頻衝擊。
+                            </div>
+                        </div>
+
+                        <!-- 奧義絕招 -->
+                        <div class="skill-box">
+                            <div class="skill-title-line">
+                                <span id="card-skill2-title" contenteditable="true">🔥⚡🔴 【極致應用 ‧ Ultimate
+                                    Synthesis】</span>
+                                <span class="skill-damage" id="card-skill2-dmg" contenteditable="true">320</span>
+                            </div>
+                            <div class="skill-description" id="card-skill2-desc" contenteditable="true">
+                                融會觀察、分析與實踐之極致能量，引發全域鏈鎖反應並清除全場不良狀態。
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 卡牌底部弱點、抗性與撤退消耗 -->
+                    <div class="card-footer">
+                        <span id="card-weakness" contenteditable="true">弱點: ⚡ x2</span>
+                        <span id="card-resistance" contenteditable="true">抗性: 🛡️ -30</span>
+                        <span id="card-retreat" contenteditable="true">撤退消耗: 🟡🟡</span>
+                    </div>
+
+                    <!-- 官方版權與創作者認證編號 -->
+                    <div class="copyright-line">
+                        <span id="card-serial" contenteditable="true">NO. 001/999 ✦ ILLUS. CHUCK</span>
+                        <span>© 2026 TCG LEGEND. ALL RIGHTS RESERVED.</span>
+                    </div>
+                </div>
+
+                <!-- 卡牌背面 -->
+                <div class="card-face card-back" id="tcg-card-back">
+                    <div class="back-emblem">
+                        <div class="back-logo" id="back-logo-icon" contenteditable="true">⚡</div>
+                    </div>
+                    <div class="back-title" id="back-title-text" contenteditable="true">LEGEND TCG</div>
+                    <div class="back-subtitle" id="back-sub-text" contenteditable="true">COLLECTOR'S EDITION</div>
+                    <div class="back-quote" id="back-quote-text" contenteditable="true">
+                        「以觀測為起點，化洞察為傳奇。」
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側：毛玻璃控制台面板 -->
+        <div class="control-panel">
+            <div class="panel-header">
+                <h2>🎛️ 3D 卡牌鑄造控制台</h2>
+                <span class="badge">TCG 63:88 ENGINE</span>
+            </div>
+
+            <!-- 預設角色模板 -->
+            <div class="panel-group">
+                <label>🎭 載入預設角色 (Presets)</label>
+                <div class="preset-row">
+                    <button class="btn-preset" onclick="loadPreset('chuck')">⚡ 查研觀攝</button>
+                    <button class="btn-preset" onclick="loadPreset('scarlet')">🔥 創發烈焰</button>
+                    <button class="btn-preset" onclick="loadPreset('void')">🌌 幽冥法師</button>
+                    <button class="btn-preset" onclick="loadPreset('cyber')">🌐 蒼穹駭客</button>
+                </div>
+            </div>
+
+            <!-- 主題色系選擇 -->
+            <div class="panel-group">
+                <label>🎨 主題色系 (Theme Palette)</label>
+                <div class="theme-palette">
+                    <button class="palette-btn active" style="background: linear-gradient(135deg, #e5a93c, #b07519);"
+                        onclick="setTheme('gold', this)">科技金</button>
+                    <button class="palette-btn" style="background: linear-gradient(135deg, #ef4444, #b91c1c);"
+                        onclick="setTheme('red', this)">創發紅</button>
+                    <button class="palette-btn" style="background: linear-gradient(135deg, #06b6d4, #0891b2);"
+                        onclick="setTheme('blue', this)">蒼穹藍</button>
+                    <button class="palette-btn" style="background: linear-gradient(135deg, #a855f7, #7e22ce);"
+                        onclick="setTheme('purple', this)">幽冥紫</button>
+                    <button class="palette-btn" style="background: linear-gradient(135deg, #10b981, #047857);"
+                        onclick="setTheme('green', this)">翡翠綠</button>
+                </div>
+            </div>
+
+            <!-- 雷射箔膜樣式 -->
+            <div class="panel-group">
+                <label>✨ 雷射箔膜動態樣式 (Holographic Foil)</label>
+                <select id="select-foil">
+                    <option value="rainbow">宇宙彩虹 (Cosmic Rainbow) ✦ 全光譜折射</option>
+                    <option value="aurora">極光全息 (Aurora Holographic) ✦ 幻境微光</option>
+                    <option value="gold">黑金浮雕 (Obsidian Gold) ✦ 尊榮流光</option>
+                    <option value="silver">銀翼幻影 (Silver Phantom) ✦ 液態冷水銀</option>
+                    <option value="starlight">星鑽炫彩 (Star Diamond) ✦ 稜鏡高亮星芒</option>
+                </select>
+            </div>
+
+            <!-- 立繪更換 -->
+            <div class="panel-group">
+                <label>🖼️ 卡牌立繪圖片 (Artwork)</label>
+                <input type="file" id="input-card-img" accept="image/*" style="display: none;">
+                <button class="btn-action" id="btn-upload" onclick="document.getElementById('input-card-img').click()">
+                    📁 上傳自訂立繪圖片 (支援 PNG / JPG / WebP)
+                </button>
+            </div>
+
+            <!-- 視角與翻牌互動 -->
+            <div class="panel-group">
+                <label>🔄 3D 視角與翻牌控制</label>
+                <div class="btn-row">
+                    <button class="btn-action" id="btn-flip">
+                        🔄 180° 正反翻牌
+                    </button>
+                    <button class="btn-action" id="btn-reset-tilt">
+                        🎯 重置 3D 角度
+                    </button>
+                </div>
+            </div>
+
+            <!-- 成果輸出 -->
+            <div class="panel-group" style="margin-bottom: 0;">
+                <label>🚀 成果輸出與發布 (Export & Share)</label>
+                <button class="btn-action btn-primary" id="btn-export">
+                    📸 一鍵匯出高畫質 PNG (300 DPI)
+                </button>
+            </div>
+
+            <!-- 提示說明區 -->
+            <div class="tip-box">
+                💡 <b>互動與鑄造指南：</b><br>
+                • <b>即時文字編修：</b> 卡面上所有文字（名稱、HP、招式、數值、描述、印記）均可<b>直接點擊編輯</b>。<br>
+                • <b>動態雷射光澤：</b> 移動滑鼠或傾斜手機，即刻呈現多層次折射彩虹光斑與金屬反射。<br>
+                • <b>零依賴發布：</b> 獨立單一檔案 <code>index.html</code>，直接上傳至 GitHub 即可一鍵啟用 GitHub Pages 免費發布！
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM 元素快取
+        const stageArea = document.getElementById('stage-area');
+        const flipWrapper = document.getElementById('flip-wrapper');
+        const tcgCard = document.getElementById('tcg-card');
+        const imageSlot = document.getElementById('image-slot');
+        const selectFoil = document.getElementById('select-foil');
+        const inputCardImg = document.getElementById('input-card-img');
+        const cardImgPreview = document.getElementById('card-img-preview');
+        const btnFlip = document.getElementById('btn-flip');
+        const btnResetTilt = document.getElementById('btn-reset-tilt');
+        const btnExport = document.getElementById('btn-export');
+
+        // 主題色彩配置庫
+        const themeConfigs = {
+            gold: {
+                primary: '#e5a93c',
+                glow: 'rgba(229, 169, 60, 0.45)',
+                border: '#d4952c',
+                darkBg: '#1c1f2b'
+            },
+            red: {
+                primary: '#ef4444',
+                glow: 'rgba(239, 68, 68, 0.45)',
+                border: '#dc2626',
+                darkBg: '#241416'
+            },
+            blue: {
+                primary: '#06b6d4',
+                glow: 'rgba(6, 182, 212, 0.45)',
+                border: '#0891b2',
+                darkBg: '#0f1d24'
+            },
+            purple: {
+                primary: '#a855f7',
+                glow: 'rgba(168, 85, 247, 0.45)',
+                border: '#9333ea',
+                darkBg: '#1f132b'
+            },
+            green: {
+                primary: '#10b981',
+                glow: 'rgba(16, 185, 129, 0.45)',
+                border: '#059669',
+                darkBg: '#0e221b'
+            }
+        };
+
+        // 切換主題顏色
+        function setTheme(themeKey, btnElement) {
+            const theme = themeConfigs[themeKey] || themeConfigs.gold;
+            document.documentElement.style.setProperty('--theme-color', theme.primary);
+            document.documentElement.style.setProperty('--theme-color-glow', theme.glow);
+            document.documentElement.style.setProperty('--theme-border', theme.border);
+            document.documentElement.style.setProperty('--theme-dark-bg', theme.darkBg);
+
+            if (btnElement) {
+                document.querySelectorAll('.palette-btn').forEach(btn => btn.classList.remove('active'));
+                btnElement.classList.add('active');
+            }
+        }
+
+        // 雷射箔膜樣式定義
+        const foilGradients = {
+            rainbow: 'linear-gradient(115deg, transparent 20%, rgba(255, 90, 90, 0.3) 30%, rgba(255, 210, 0, 0.35) 42%, rgba(0, 255, 255, 0.3) 50%, rgba(130, 100, 255, 0.3) 60%, transparent 72%)',
+            aurora: 'linear-gradient(135deg, rgba(0, 255, 220, 0.32) 0%, rgba(160, 50, 255, 0.32) 50%, rgba(0, 210, 255, 0.32) 100%)',
+            gold: 'linear-gradient(120deg, rgba(255, 215, 0, 0.15) 10%, rgba(255, 215, 0, 0.4) 30%, rgba(255, 255, 255, 0.5) 50%, rgba(218, 165, 32, 0.4) 70%, transparent 90%)',
+            silver: 'linear-gradient(105deg, rgba(255, 255, 255, 0.1) 15%, rgba(200, 225, 255, 0.4) 40%, rgba(255, 255, 255, 0.6) 50%, rgba(180, 205, 235, 0.4) 60%, transparent 85%)',
+            starlight: 'radial-gradient(circle at var(--foil-pos-x, 50%) var(--foil-pos-y, 50%), rgba(255, 255, 255, 0.5) 0%, rgba(255, 120, 220, 0.35) 25%, rgba(100, 220, 255, 0.3) 45%, transparent 70%)'
+        };
+
+        // 切換雷射箔膜選單
+        selectFoil.addEventListener('change', (e) => {
+            const selectedStyle = foilGradients[e.target.value] || foilGradients.rainbow;
+            document.documentElement.style.setProperty('--laser-gradient', selectedStyle);
+        });
+
+        // 3D 視差與雷射光斑跟隨引擎
+        function handleMove(clientX, clientY) {
+            if (flipWrapper.classList.contains('flipped')) return;
+
+            const rect = tcgCard.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+
+            // 稍微超出邊界依然提供滑順角度體驗
+            const boundedX = Math.max(0, Math.min(x, rect.width));
+            const boundedY = Math.max(0, Math.min(y, rect.height));
+
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+
+            // 計算旋轉角度 (限制在 ±14 度內)
+            const rotateX = -((boundedY - centerY) / centerY) * 14;
+            const rotateY = ((boundedX - centerX) / centerX) * 14;
+
+            tcgCard.style.transform = `rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
+            tcgCard.style.boxShadow = `${-rotateY * 1.5}px ${rotateX * 1.5 + 20}px 45px rgba(0, 0, 0, 0.7), 0 0 25px var(--theme-color-glow)`;
+
+            // 計算雷射反射光斑與高光位置百分比
+            const posX = Math.round((boundedX / rect.width) * 100);
+            const posY = Math.round((boundedY / rect.height) * 100);
+            document.documentElement.style.setProperty('--foil-pos-x', `${posX}%`);
+            document.documentElement.style.setProperty('--foil-pos-y', `${posY}%`);
+            document.documentElement.style.setProperty('--glare-pos-x', `${posX}%`);
+            document.documentElement.style.setProperty('--glare-pos-y', `${posY}%`);
+            document.documentElement.style.setProperty('--glare-opacity', '0.7');
+        }
+
+        function resetCardTilt() {
+            tcgCard.style.transform = 'rotateX(0deg) rotateY(0deg)';
+            tcgCard.style.boxShadow = '0 20px 45px rgba(0, 0, 0, 0.7), 0 0 25px var(--theme-color-glow)';
+            document.documentElement.style.setProperty('--foil-pos-x', '50%');
+            document.documentElement.style.setProperty('--foil-pos-y', '50%');
+            document.documentElement.style.setProperty('--glare-pos-x', '50%');
+            document.documentElement.style.setProperty('--glare-pos-y', '50%');
+            document.documentElement.style.setProperty('--glare-opacity', '0.4');
+        }
+
+        // 滑鼠與觸控事件監聽
+        stageArea.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
+        stageArea.addEventListener('mouseleave', resetCardTilt);
+
+        stageArea.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 0) {
+                handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        }, { passive: true });
+        stageArea.addEventListener('touchend', resetCardTilt);
+
+        // 陀螺儀動態傾角 (行動裝置重力感應支援)
+        if (window.DeviceOrientationEvent) {
+            window.addEventListener('deviceorientation', (e) => {
+                if (flipWrapper.classList.contains('flipped') || !e.gamma || !e.beta) return;
+                const tiltX = Math.min(Math.max(e.gamma, -25), 25);
+                const tiltY = Math.min(Math.max(e.beta - 45, -25), 25);
+                tcgCard.style.transform = `rotateX(${-tiltY * 0.55}deg) rotateY(${tiltX * 0.55}deg)`;
+                const posX = Math.round(50 + tiltX);
+                const posY = Math.round(50 + tiltY);
+                document.documentElement.style.setProperty('--foil-pos-x', `${posX}%`);
+                document.documentElement.style.setProperty('--foil-pos-y', `${posY}%`);
+            });
+        }
+
+        // 180° 正反翻牌按鈕
+        btnFlip.addEventListener('click', () => {
+            resetCardTilt();
+            flipWrapper.classList.toggle('flipped');
+        });
+
+        // 點擊卡牌背面亦可翻回正面
+        document.getElementById('tcg-card-back').addEventListener('click', (e) => {
+            if (e.target.hasAttribute('contenteditable')) return;
+            resetCardTilt();
+            flipWrapper.classList.remove('flipped');
+        });
+
+        // 重置 3D 視角按鈕
+        btnResetTilt.addEventListener('click', resetCardTilt);
+
+        // 點擊立繪槽亦可觸發上傳
+        imageSlot.addEventListener('click', (e) => {
+            if (e.target.id === 'card-rarity') return;
+            inputCardImg.click();
+        });
+
+        // 本地上傳立繪圖片處理
+        inputCardImg.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    cardImgPreview.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // 一鍵匯出高畫質 PNG (html2canvas)
+        btnExport.addEventListener('click', () => {
+            // 若目前在背面，先翻回正面以確保完整匯出正面
+            const wasFlipped = flipWrapper.classList.contains('flipped');
+            if (wasFlipped) {
+                flipWrapper.classList.remove('flipped');
+            }
+            resetCardTilt();
+
+            const exportBtn = btnExport;
+            const originalText = exportBtn.innerHTML;
+            exportBtn.innerHTML = '⏳ 正在產出高解析 PNG...';
+            exportBtn.disabled = true;
+
+            setTimeout(() => {
+                html2canvas(tcgCard, {
+                    scale: 3, // 300 DPI 超高清晰度
+                    useCORS: true,
+                    allowTaint: true,
+                    backgroundColor: null
+                }).then((canvas) => {
+                    const link = document.createElement('a');
+                    const cardName = document.getElementById('card-name').innerText.trim() || 'TCG_Card';
+                    link.download = `${cardName}_LegendCard.png`;
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                    exportBtn.innerHTML = originalText;
+                    exportBtn.disabled = false;
+                }).catch((err) => {
+                    console.error('匯出失敗:', err);
+                    alert('匯出失敗，請確認圖片無跨域限制。');
+                    exportBtn.innerHTML = originalText;
+                    exportBtn.disabled = false;
+                });
+            }, 350);
+        });
+
+        // 預設角色模板庫
+        const presetData = {
+            chuck: {
+                theme: 'gold',
+                foil: 'rainbow',
+                tag: 'Specialist',
+                name: '查研觀攝',
+                hp: '1000',
+                rarity: 'SSR ✦ LEGEND',
+                img: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&auto=format&fit=crop&q=80',
+                traitTitle: '🔶 【特性】全焦段聚焦 ‧ Multi-Focus',
+                traitDesc: '切換工程架構鏡頭與眼鏡鏡頭視角，觀察精準度提升 40%，且不受資訊過載干擾。',
+                s1Title: '⚪⚪ 【觀察紀錄員 ‧ Vision Recorder】',
+                s1Dmg: '180+',
+                s1Desc: '透過單眼焦距精準捕捉全景細節脈絡，重構結構邏輯並對目標區域造成高頻衝擊。',
+                s2Title: '🔥⚡🔴 【極致應用 ‧ Ultimate Synthesis】',
+                s2Dmg: '320',
+                s2Desc: '融會觀察、分析與實踐之極致能量，引發全域鏈鎖反應並清除全場不良狀態。',
+                weakness: '弱點: ⚡ x2',
+                resistance: '抗性: 🛡️ -30',
+                retreat: '撤退消耗: 🟡🟡',
+                serial: 'NO. 001/999 ✦ ILLUS. CHUCK',
+                backLogo: '⚡',
+                backQuote: '「以觀測為起點，化洞察為傳奇。」'
+            },
+            scarlet: {
+                theme: 'red',
+                foil: 'aurora',
+                tag: 'Vanguard',
+                name: '炎陽先鋒 ‧ 艾蕾娜',
+                hp: '2800',
+                rarity: 'UR ✦ SECRET',
+                img: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=800&auto=format&fit=crop&q=80',
+                traitTitle: '🔥 【特性】熾炎共鳴 ‧ Solar Resonance',
+                traitDesc: '每回合開始時凝聚日輪核心，所有火屬性攻擊傷害常態提升 25%。',
+                s1Title: '⚔️🔥 【裂地烈火斬 ‧ Flame Cleave】',
+                s1Dmg: '220',
+                s1Desc: '揮舞附著三千度高溫之赤焰大劍斬擊敵陣，使目標陷入灼燒狀態。',
+                s2Title: '💥💥💥 【業火紅蓮破 ‧ Supernova】',
+                s2Dmg: '450',
+                s2Desc: '引爆體內全部日焰能量，引發宛如超新星爆發般的毀滅性焚世衝擊。',
+                weakness: '弱點: 💧 x2',
+                resistance: '抗性: 🌿 -30',
+                retreat: '撤退消耗: 🔴🔴🔴',
+                serial: 'NO. 002/999 ✦ ILLUS. SCARLET',
+                backLogo: '🔥',
+                backQuote: '「縱使星河盡隕，烈焰永不熄滅。」'
+            },
+            void: {
+                theme: 'purple',
+                foil: 'gold',
+                tag: 'Arcanist',
+                name: '幽冥秘術師 ‧ 莫甘',
+                hp: '1900',
+                rarity: 'SSR ✦ SHADOW',
+                img: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+                traitTitle: '👁️ 【特性】虛空折躍 ‧ Void Phase',
+                traitDesc: '受到致命攻擊時有 50% 機率隱入維度裂縫，免疫本次傷害並瞬移至後排。',
+                s1Title: '🔮🌑 【幽冥魂縛 ‧ Soul Siphon】',
+                s1Dmg: '150',
+                s1Desc: '汲取敵方生命能量，同時為自身回復等同傷害值 50% 之生命力。',
+                s2Title: '🌌⚡ 【終焉黑洞 ‧ Event Horizon】',
+                s2Dmg: '380',
+                s2Desc: '撕裂現世空間召喚微型黑洞，將全體敵方單位向中心牽引並造成重壓。',
+                weakness: '弱點: ☀️ x2',
+                resistance: '抗性: 🔮 -40',
+                retreat: '撤退消耗: 🟣',
+                serial: 'NO. 003/999 ✦ ILLUS. MORGAN',
+                backLogo: '🔮',
+                backQuote: '「凝視深淵之時，深淵早已成為我的僕從。」'
+            },
+            cyber: {
+                theme: 'blue',
+                foil: 'silver',
+                tag: 'Netrunner',
+                name: '蒼穹神經元 ‧ 零',
+                hp: '2200',
+                rarity: 'HR ✦ CYBER',
+                img: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800&auto=format&fit=crop&q=80',
+                traitTitle: '🌐 【特性】矩陣超頻 ‧ Overclock 4.0',
+                traitDesc: '進入量子運算姿態，所有技能冷卻回合減半，並破除敵方所有護盾。',
+                s1Title: '⚡💻 【代碼風暴 ‧ Packet Flood】',
+                s1Dmg: '190',
+                s1Desc: '釋放巨量惡意封包癱瘓敵方中樞神經網路，使其陷入癱瘓無法行動。',
+                s2Title: '🚀📡 【零日天罰 ‧ Zero-Day Strike】',
+                s2Dmg: '410',
+                s2Desc: '奪取軌道衛星激光控制權，從近地軌道發射高密度高能離子光束。',
+                weakness: '弱點: ⚡ x2',
+                resistance: '抗性: 🛡️ -20',
+                retreat: '撤退消耗: 🔵🔵',
+                serial: 'NO. 004/999 ✦ ILLUS. ZERO',
+                backLogo: '🌐',
+                backQuote: '「世界只是代碼的載體，而我是重寫者。」'
+            }
+        };
+
+        // 載入預設模板函式
+        function loadPreset(key) {
+            const data = presetData[key];
+            if (!data) return;
+
+            // 套用文字
+            document.getElementById('card-tag').innerText = data.tag;
+            document.getElementById('card-name').innerText = data.name;
+            document.getElementById('card-hp').innerText = data.hp;
+            document.getElementById('card-rarity').innerText = data.rarity;
+            cardImgPreview.src = data.img;
+            document.getElementById('card-trait-title').innerText = data.traitTitle;
+            document.getElementById('card-trait-desc').innerText = data.traitDesc;
+            document.getElementById('card-skill1-title').innerText = data.s1Title;
+            document.getElementById('card-skill1-dmg').innerText = data.s1Dmg;
+            document.getElementById('card-skill1-desc').innerText = data.s1Desc;
+            document.getElementById('card-skill2-title').innerText = data.s2Title;
+            document.getElementById('card-skill2-dmg').innerText = data.s2Dmg;
+            document.getElementById('card-skill2-desc').innerText = data.s2Desc;
+            document.getElementById('card-weakness').innerText = data.weakness;
+            document.getElementById('card-resistance').innerText = data.resistance;
+            document.getElementById('card-retreat').innerText = data.retreat;
+            document.getElementById('card-serial').innerText = data.serial;
+            document.getElementById('back-logo-icon').innerText = data.backLogo;
+            document.getElementById('back-quote-text').innerText = data.backQuote;
+
+            // 套用色彩主題
+            const paletteBtns = document.querySelectorAll('.palette-btn');
+            const themeMap = { gold: 0, red: 1, blue: 2, purple: 3, green: 4 };
+            if (themeMap[data.theme] !== undefined) {
+                setTheme(data.theme, paletteBtns[themeMap[data.theme]]);
+            }
+
+            // 套用雷射箔膜
+            selectFoil.value = data.foil;
+            selectFoil.dispatchEvent(new Event('change'));
+        }
+    </script>
+</body>
+
+</html>
